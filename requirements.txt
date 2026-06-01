@@ -1,7 +1,5 @@
 discord.py
 yfinance
-mplfinance
 pandas
 Pillow
-vaderSentiment
 requests
