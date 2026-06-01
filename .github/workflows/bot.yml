@@ -1,16 +1,15 @@
-name: Trading Bot Runner
+name: Trading Bot Auto-Runner
 
 on:
   push:
     branches:
       - main
   schedule:
-    # Redémarre automatiquement toutes les 5 heures pour éviter la limite de 6h de GitHub
-    - cron: "0 */5 * * *"
-  workflow_dispatch: # Permet de le lancer manuellement via un bouton
+    - cron: "0 */5 * * *" # Relance le bot automatiquement toutes les 5 heures
+  workflow_dispatch:
 
 jobs:
-  build:
+  run-bot:
     runs-on: ubuntu-latest
 
     steps:
@@ -27,7 +26,7 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
-      - name: Run Discord Bot
+      - name: Start Discord Bot
         env:
           DISCORD_TOKEN: ${{ secrets.DISCORD_TOKEN }}
         run: python bot.py
