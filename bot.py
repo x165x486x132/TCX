@@ -1,67 +1,70 @@
 import discord
-from discord.ext import commands
+from discord import app_commands
 import yfinance as yf
 from vaderSentiment.vaderSentiment import SentimentIntensityAnalyzer
 import os
-from dotenv import load_dotenv
 
-# Imports de nos propres fichiers
 from tv_engine import generate_tradingview_alert
-from keep_alive import keep_alive
 
-# Charger l'environnement
-load_dotenv()
-TOKEN = os.getenv('DISCORD_TOKEN')
+# Initialisation du bot
+class MyBot(discord.Client):
+    def __init__(self):
+        super().__init__(intents=discord.Intents.default())
+        self.tree = app_commands.CommandTree(self)
 
-# Configuration Discord
-intents = discord.Intents.default()
-intents.message_content = True
-bot = commands.Bot(command_prefix='!', intents=intents)
+    async def setup_hook(self):
+        await self.tree.sync() # Synchronise les Slash Commands avec Discord
+
+bot = MyBot()
 analyzer = SentimentIntensityAnalyzer()
 
 @bot.event
 async def on_ready():
-    print(f'✅ Bot en ligne ! Connecté en tant que {bot.user}')
-    await bot.change_presence(activity=discord.Game(name="!analyze <ticker>"))
+    print(f'✅ Bot connecté en tant que {bot.user}')
+    await bot.change_presence(activity=discord.Game(name="/analyze <ticker>"))
 
-@bot.command()
-async def analyze(ctx, ticker: str):
+@bot.tree.command(name="analyze", description="Génère une analyse graphique et sentimentale pour une action (ex: TSLA, AAPL, BTC-USD)")
+@app_commands.describe(ticker="Le symbole de l'action ou crypto (ex: TSLA)")
+async def analyze(interaction: discord.Interaction, ticker: str):
     ticker = ticker.upper()
-    await ctx.send(f"🔍 *Analyse algorithmique en cours pour **{ticker}**...*")
+    
+    # Indique à Discord que le bot "réfléchit" (évite le message d'erreur d'attente)
+    await interaction.response.defer()
     
     try:
-        # Récupérer l'action
+        # Récupération des données financières
         stock = yf.Ticker(ticker)
         info = stock.info
         company_name = info.get('shortName', ticker)
         
-        # Analyser les news
+        # Récupération des news
         news_list = stock.news
         if not news_list:
-            await ctx.send(f"❌ Aucune actualité pertinente trouvée pour {ticker}.")
+            await interaction.followup.send(f"❌ Aucune actualité récente trouvée pour `{ticker}`.")
             return
             
         latest_news = news_list[0]['title']
         
-        # IA Sentiment (Vader)
+        # Analyse IA du sentiment
         sentiment_score = analyzer.polarity_scores(latest_news)['compound']
         trend = "BULLISH" if sentiment_score >= 0.05 else "BEARISH"
         
-        # Générer l'image
+        # Génération de l'image
         image_path = generate_tradingview_alert(ticker, company_name, trend, latest_news)
         
-        # Envoyer sur Discord
+        # Envoi de la réponse finale avec l'image
         with open(image_path, 'rb') as f:
             picture = discord.File(f, filename=f"{ticker}_alert.png")
-            embed_msg = f"📊 **ANALYSE COMPLÈTE : {company_name} ({ticker})**\n> 🗞️ *{latest_news}*"
-            await ctx.send(content=embed_msg, file=picture)
+            embed_msg = f"📊 **ANALYSE : {company_name} ({ticker})**\n> 🗞️ *{latest_news}*"
+            await interaction.followup.send(content=embed_msg, file=picture)
             
     except Exception as e:
-        await ctx.send(f"⚠️ Erreur lors de l'analyse : `{e}`")
+        await interaction.followup.send(f"⚠️ Erreur lors de l'analyse du ticker `{ticker}`. Existe-t-il vraiment ?")
 
 if __name__ == "__main__":
+    # Récupération sécurisée du token via les GitHub Secrets
+    TOKEN = os.getenv('DISCORD_TOKEN')
     if not TOKEN:
-        print("❌ ERREUR : DISCORD_TOKEN introuvable. Configure les variables d'environnement.")
+        print("❌ ERREUR CRITIQUE : DISCORD_TOKEN introuvable.")
     else:
-        keep_alive() # Démarre le serveur anti-sommeil
         bot.run(TOKEN)
