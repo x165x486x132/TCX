@@ -1,70 +1,93 @@
 import discord
 from discord import app_commands
 import yfinance as yf
-from vaderSentiment.vaderSentiment import SentimentIntensityAnalyzer
 import os
 
-from tv_engine import generate_tradingview_alert
+from heatmap_engine import generate_market_dashboard
 
-# Initialisation du bot
-class MyBot(discord.Client):
+# La liste des géants à surveiller (exactement 8 pour le design)
+WATCHLIST = ["NVDA", "AAPL", "MSFT", "TSLA", "AMZN", "META", "GOOGL", "AMD"]
+
+class MarketBot(discord.Client):
     def __init__(self):
         super().__init__(intents=discord.Intents.default())
         self.tree = app_commands.CommandTree(self)
 
     async def setup_hook(self):
-        await self.tree.sync() # Synchronise les Slash Commands avec Discord
+        await self.tree.sync()
 
-bot = MyBot()
-analyzer = SentimentIntensityAnalyzer()
+bot = MarketBot()
+
+def get_market_data():
+    """Récupère les prix et pourcentages actuels sur Yahoo Finance."""
+    data = []
+    for sym in WATCHLIST:
+        try:
+            tkr = yf.Ticker(sym)
+            hist = tkr.history(period="2d")
+            if len(hist) >= 2:
+                close_prev = hist['Close'].iloc[-2]
+                close_curr = hist['Close'].iloc[-1]
+                pct = ((close_curr - close_prev) / close_prev) * 100
+                data.append({"symbol": sym, "price": close_curr, "change": pct})
+        except Exception:
+            pass
+    # Trier du plus grand gagnant au plus grand perdant
+    data.sort(key=lambda x: x['change'], reverse=True)
+    return data
+
+class RefreshButton(discord.ui.View):
+    def __init__(self):
+        super().__init__(timeout=None) # Le bouton ne désactive jamais
+
+    @discord.ui.button(label="🔄 Actualiser les prix", style=discord.ButtonStyle.blurple)
+    async def refresh(self, interaction: discord.Interaction, button: discord.ui.Button):
+        # Discord a besoin de savoir qu'on traite la demande
+        await interaction.response.defer()
+        
+        # 1. On re-télécharge les données
+        data = get_market_data()
+        
+        # 2. On regénère la nouvelle image esthétique
+        image_path = generate_market_dashboard(data)
+        
+        # 3. On reconstruit l'Embed
+        embed = discord.Embed(title="🌐 WALL STREET - TOP TECH", color=0x2b2d31)
+        embed.description = "État actuel des actions les plus suivies."
+        
+        # 4. On modifie (edit) le message avec la nouvelle image !
+        file = discord.File(image_path, filename="dashboard.png")
+        embed.set_image(url="attachment://dashboard.png")
+        
+        await interaction.edit_original_response(embed=embed, attachments=[file], view=self)
 
 @bot.event
 async def on_ready():
-    print(f'✅ Bot connecté en tant que {bot.user}')
-    await bot.change_presence(activity=discord.Game(name="/analyze <ticker>"))
+    print(f'✅ Bot {bot.user} en ligne !')
+    await bot.change_presence(activity=discord.Game(name="/market"))
 
-@bot.tree.command(name="analyze", description="Génère une analyse graphique et sentimentale pour une action (ex: TSLA, AAPL, BTC-USD)")
-@app_commands.describe(ticker="Le symbole de l'action ou crypto (ex: TSLA)")
-async def analyze(interaction: discord.Interaction, ticker: str):
-    ticker = ticker.upper()
+@bot.tree.command(name="market", description="Affiche le tableau de bord esthétique des géants de Wall Street.")
+async def market(interaction: discord.Interaction):
+    await interaction.response.defer() # Fait patienter Discord
     
-    # Indique à Discord que le bot "réfléchit" (évite le message d'erreur d'attente)
-    await interaction.response.defer()
+    # Récupérer les data et générer l'image
+    data = get_market_data()
+    image_path = generate_market_dashboard(data)
     
-    try:
-        # Récupération des données financières
-        stock = yf.Ticker(ticker)
-        info = stock.info
-        company_name = info.get('shortName', ticker)
-        
-        # Récupération des news
-        news_list = stock.news
-        if not news_list:
-            await interaction.followup.send(f"❌ Aucune actualité récente trouvée pour `{ticker}`.")
-            return
-            
-        latest_news = news_list[0]['title']
-        
-        # Analyse IA du sentiment
-        sentiment_score = analyzer.polarity_scores(latest_news)['compound']
-        trend = "BULLISH" if sentiment_score >= 0.05 else "BEARISH"
-        
-        # Génération de l'image
-        image_path = generate_tradingview_alert(ticker, company_name, trend, latest_news)
-        
-        # Envoi de la réponse finale avec l'image
-        with open(image_path, 'rb') as f:
-            picture = discord.File(f, filename=f"{ticker}_alert.png")
-            embed_msg = f"📊 **ANALYSE : {company_name} ({ticker})**\n> 🗞️ *{latest_news}*"
-            await interaction.followup.send(content=embed_msg, file=picture)
-            
-    except Exception as e:
-        await interaction.followup.send(f"⚠️ Erreur lors de l'analyse du ticker `{ticker}`. Existe-t-il vraiment ?")
+    # Créer l'embed Discord
+    embed = discord.Embed(title="🌐 WALL STREET - TOP TECH", color=0x2b2d31)
+    embed.description = "Cliquez sur actualiser pour rafraîchir les cours en direct."
+    
+    # Attacher l'image à l'embed
+    file = discord.File(image_path, filename="dashboard.png")
+    embed.set_image(url="attachment://dashboard.png")
+    
+    # Envoyer le message avec le bouton
+    await interaction.followup.send(embed=embed, file=file, view=RefreshButton())
 
 if __name__ == "__main__":
-    # Récupération sécurisée du token via les GitHub Secrets
     TOKEN = os.getenv('DISCORD_TOKEN')
     if not TOKEN:
-        print("❌ ERREUR CRITIQUE : DISCORD_TOKEN introuvable.")
+        print("❌ ERREUR : DISCORD_TOKEN introuvable.")
     else:
         bot.run(TOKEN)
