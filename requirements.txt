@@ -1,0 +1,8 @@
+yfinance
+mplfinance
+pandas
+Pillow
+discord.py
+vaderSentiment
+python-dotenv
+Flask
