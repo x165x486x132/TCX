@@ -3,9 +3,9 @@ import os
 import requests
 import textwrap
 
-# --- CONSTANTES DESIGN (STYLE REVOLUT / APPLE STOCKS) ---
-BG_COLOR = "#000000"       # Noir OLED
-CARD_COLOR = "#1C1C1E"     # Gris iOS
+# --- CONSTANTES DESIGN (STYLE REVOLUT / INSTITUTIONNEL) ---
+BG_COLOR = "#000000"       
+CARD_COLOR = "#1C1C1E"     
 TEXT_MAIN = "#FFFFFF"
 TEXT_MUTED = "#8E8E93"
 GREEN_HEX = "#34C759"
@@ -33,8 +33,8 @@ def get_fonts():
         return {
             "title": ImageFont.truetype(pb, 45),
             "sub": ImageFont.truetype(pr, 22),
-            "sym": ImageFont.truetype(pb, 34),
-            "price": ImageFont.truetype(pb, 38),
+            "sym": ImageFont.truetype(pb, 32),
+            "price": ImageFont.truetype(pb, 36),
             "pct": ImageFont.truetype(pb, 22),
             "mini": ImageFont.truetype(pm, 18),
             "news_title": ImageFont.truetype(pm, 20),
@@ -44,8 +44,22 @@ def get_fonts():
         default = ImageFont.load_default()
         return {k: default for k in ["title", "sub", "sym", "price", "pct", "mini", "news_title", "news_src"]}
 
+def format_price(symbol, price):
+    """Adapte l'affichage du prix selon l'actif."""
+    if "^" in symbol: # Indices (S&P500, Nasdaq...)
+        return f"{price:,.2f} pts"
+    elif "=X" in symbol: # Forex (Devises)
+        return f"{price:,.4f}"
+    elif price < 1: # Petites Cryptos
+        return f"${price:,.4f}"
+    else: # Actions et grosses Cryptos
+        return f"${price:,.2f}"
+
 def draw_sparkline(img, data_points, x, y, w, h, color_hex):
-    if not data_points or len(data_points) < 2: return
+    # SÉCURITÉ ANTI-CRASH (Vérifie que data_points est bien une liste valide)
+    if not isinstance(data_points, list) or len(data_points) < 2: 
+        return
+        
     min_val, max_val = min(data_points), max(data_points)
     if max_val == min_val: max_val += 0.01
 
@@ -70,7 +84,7 @@ def draw_sparkline(img, data_points, x, y, w, h, color_hex):
     draw.line(coords, fill=color_hex, width=3, joint="curve")
 
 # ==========================================
-# 1. GÉNÉRATEUR DASHBOARD (MARKET & CRYPTO)
+# 1. GÉNÉRATEUR DASHBOARD GLOBAL
 # ==========================================
 def generate_dashboard_image(data, title, filename):
     fonts = get_fonts()
@@ -79,7 +93,7 @@ def generate_dashboard_image(data, title, filename):
     draw = ImageDraw.Draw(img)
 
     draw.text((50, 40), title, fill=TEXT_MAIN, font=fonts['title'])
-    draw.text((50, 100), "Algorithmic Tracking • Real-Time Data", fill=TEXT_MUTED, font=fonts['sub'])
+    draw.text((50, 100), "Algorithmic Tracking • Real-Time Market Data", fill=TEXT_MUTED, font=fonts['sub'])
 
     cols, rows = 4, 2
     margin_x, margin_y = 50, 160
@@ -87,7 +101,7 @@ def generate_dashboard_image(data, title, filename):
     block_w = (width - (2 * margin_x) - (cols - 1) * gap) // cols
     block_h = (height - margin_y - 50 - (rows - 1) * gap) // rows
 
-    for i, item in enumerate(data[:8]): # Limité à 8
+    for i, item in enumerate(data[:8]): 
         x = margin_x + (i % cols) * (block_w + gap)
         y = margin_y + (i // cols) * (block_h + gap)
         
@@ -97,12 +111,17 @@ def generate_dashboard_image(data, title, filename):
         hex_color = GREEN_HEX if is_up else RED_HEX
         sign = "+" if is_up else ""
 
-        draw.text((x + 20, y + 20), item['symbol'], fill=TEXT_MAIN, font=fonts['sym'])
-        # Formatage du prix selon si c'est crypto ou stock
-        price_str = f"${item['price']:,.4f}" if item['price'] < 1 else f"${item['price']:,.2f}"
+        # Nom de l'actif
+        draw.text((x + 20, y + 20), item['display_name'], fill=TEXT_MAIN, font=fonts['sym'])
+        
+        # Prix Formaté
+        price_str = format_price(item['raw_symbol'], item['price'])
         draw.text((x + 20, y + 65), price_str, fill=TEXT_MAIN, font=fonts['price'])
+        
+        # Pourcentage
         draw.text((x + 20, y + 115), f"{sign}{item['change']:.2f}%", fill=hex_color, font=fonts['pct'])
 
+        # Sparkline
         draw_sparkline(img, item['history'], x + 120, y + 70, block_w - 140, 60, hex_color)
 
     final_img = img.convert("RGB")
@@ -112,7 +131,7 @@ def generate_dashboard_image(data, title, filename):
     return out_path
 
 # ==========================================
-# 2. GÉNÉRATEUR REPORT INTEL (IMAGE UNIQUE)
+# 2. GÉNÉRATEUR REPORT INTEL
 # ==========================================
 def generate_intel_image(ticker, intel_data, news_data):
     fonts = get_fonts()
@@ -120,22 +139,19 @@ def generate_intel_image(ticker, intel_data, news_data):
     img = Image.new("RGBA", (width, height), BG_COLOR)
     draw = ImageDraw.Draw(img)
 
-    # --- Header ---
     draw.text((50, 40), f"{intel_data['name']} ({ticker})", fill=TEXT_MAIN, font=fonts['title'])
     draw.text((50, 100), "AI Quantitative Report • Live Snapshot", fill=TEXT_MUTED, font=fonts['sub'])
 
-    # --- Tendance Globale ---
     is_up = intel_data['change'] >= 0
     main_color = GREEN_HEX if is_up else RED_HEX
     sign = "+" if is_up else ""
     
-    draw.text((800, 40), f"${intel_data['price']:,.2f}", fill=TEXT_MAIN, font=fonts['title'])
+    price_str = format_price(ticker, intel_data['price'])
+    draw.text((800, 40), price_str, fill=TEXT_MAIN, font=fonts['title'])
     draw.text((800, 100), f"{sign}{intel_data['change']:.2f}% Today", fill=main_color, font=fonts['sub'])
 
-    # --- Ligne Séparatrice ---
     draw.line([(50, 150), (950, 150)], fill=CARD_COLOR, width=3)
 
-    # --- Grille de Statistiques (3x2) ---
     stats = [
         ("MARKET CAP", intel_data['mcap']),
         ("P/E RATIO", intel_data['pe']),
@@ -152,7 +168,6 @@ def generate_intel_image(ticker, intel_data, news_data):
         x = 50 + col * 300
         y = stat_y + row * 90
         
-        # Couleur spéciale pour le sentiment
         val_color = TEXT_MAIN
         if "BULLISH" in val or "BUY" in val: val_color = GREEN_HEX
         elif "BEARISH" in val or "SELL" in val or "UNDER" in val: val_color = RED_HEX
@@ -160,22 +175,15 @@ def generate_intel_image(ticker, intel_data, news_data):
         draw.text((x, y), label, fill=TEXT_MUTED, font=fonts['mini'])
         draw.text((x, y + 25), str(val), fill=val_color, font=fonts['sym'])
 
-    # --- Section News ---
     draw.line([(50, 380), (950, 380)], fill=CARD_COLOR, width=3)
     draw.text((50, 410), "LATEST FINANCIAL INTELLIGENCE", fill=TEXT_MUTED, font=fonts['sub'])
 
     news_y = 460
     for article in news_data[:3]:
-        # Boîte de la news
         draw.rounded_rectangle([50, news_y, 950, news_y + 90], radius=15, fill=CARD_COLOR)
-        
-        # Source (Journal)
         draw.text((70, news_y + 15), f"📰 {article['publisher'].upper()}", fill=TEXT_MUTED, font=fonts['news_src'])
-        
-        # Titre (Coupé proprement)
         wrapped_title = textwrap.shorten(article['title'], width=85, placeholder="...")
         draw.text((70, news_y + 45), wrapped_title, fill=TEXT_MAIN, font=fonts['news_title'])
-        
         news_y += 105
 
     final_img = img.convert("RGB")
