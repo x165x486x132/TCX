@@ -2,14 +2,14 @@ import discord
 from discord import app_commands
 import yfinance as yf
 from vaderSentiment.vaderSentiment import SentimentIntensityAnalyzer
-import pandas as pd
 import os
 
-from heatmap_engine import generate_market_dashboard
+from ui_engine import generate_dashboard_image, generate_intel_image
 
-WATCHLIST = ["NVDA", "AAPL", "MSFT", "TSLA", "AMZN", "META", "GOOGL", "AMD"]
+WATCHLIST_MARKET = ["NVDA", "AAPL", "MSFT", "TSLA", "AMZN", "META", "GOOGL", "AMD"]
+WATCHLIST_CRYPTO = ["BTC-USD", "ETH-USD", "SOL-USD", "BNB-USD", "XRP-USD", "ADA-USD", "AVAX-USD", "DOGE-USD"]
 
-class MarketBot(discord.Client):
+class TradingBot(discord.Client):
     def __init__(self):
         super().__init__(intents=discord.Intents.default())
         self.tree = app_commands.CommandTree(self)
@@ -17,86 +17,80 @@ class MarketBot(discord.Client):
     async def setup_hook(self):
         await self.tree.sync()
 
-bot = MarketBot()
+bot = TradingBot()
 analyzer = SentimentIntensityAnalyzer()
 
-def calculate_rsi(data, periods=14):
-    """Calcule le Relative Strength Index (Indicateur Technique)."""
-    if len(data) < periods: return 50
-    delta = data['Close'].diff()
-    gain = (delta.where(delta > 0, 0)).rolling(window=periods).mean()
-    loss = (-delta.where(delta < 0, 0)).rolling(window=periods).mean()
-    rs = gain / loss
-    rsi = 100 - (100 / (1 + rs))
-    return rsi.iloc[-1]
-
-def get_market_data():
-    """Récupère les données, le RSI et le Volume."""
+def get_live_data(watchlist):
+    """Télécharge les données pour un tableau de bord."""
     data = []
-    for sym in WATCHLIST:
+    for sym in watchlist:
         try:
             tkr = yf.Ticker(sym)
-            hist = tkr.history(period="1mo") # Besoin d'un mois pour le RSI
+            hist = tkr.history(period="7d")
             if len(hist) >= 2:
                 close_prev = hist['Close'].iloc[-2]
                 close_curr = hist['Close'].iloc[-1]
                 pct = ((close_curr - close_prev) / close_prev) * 100
+                hist_7d = hist['Close'].tolist()
                 
-                # 7 jours pour la sparkline
-                hist_7d = hist['Close'].tail(7).tolist() 
-                volume = hist['Volume'].iloc[-1]
-                rsi = calculate_rsi(hist)
-
-                data.append({
-                    "symbol": sym, 
-                    "price": close_curr, 
-                    "change": pct, 
-                    "history": hist_7d,
-                    "volume": volume,
-                    "rsi": rsi
-                })
-        except Exception as e:
-            print(f"Erreur data {sym}: {e}")
+                # Formater les cryptos sans le "-USD" pour l'UI
+                display_sym = sym.replace("-USD", "")
+                data.append({"symbol": display_sym, "price": close_curr, "change": pct, "history": hist_7d})
+        except:
             pass
-            
     data.sort(key=lambda x: x['change'], reverse=True)
     return data
 
-class RefreshButton(discord.ui.View):
-    def __init__(self):
-        super().__init__(timeout=None)
-
-    @discord.ui.button(label="🔄 Actualiser les data quantitatives", style=discord.ButtonStyle.blurple)
-    async def refresh(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await interaction.response.defer()
-        data = get_market_data()
-        image_path = generate_market_dashboard(data)
-        
-        embed = discord.Embed(title="🌐 TERMINAL WALL STREET", color=0x13141C)
-        file = discord.File(image_path, filename="dashboard.png")
-        embed.set_image(url="attachment://dashboard.png")
-        
-        await interaction.edit_original_response(embed=embed, attachments=[file], view=self)
-
 @bot.event
 async def on_ready():
-    print(f'✅ Bot {bot.user} en ligne (Mode Institutionnel) !')
-    await bot.change_presence(activity=discord.Game(name="/market | /intel"))
+    print(f'✅ Bot {bot.user} en ligne (Revolut UI Mode) !')
+    await bot.change_presence(activity=discord.Game(name="/intel | /market"))
 
-@bot.tree.command(name="market", description="Affiche le dashboard quantitatif du marché.")
+# ====================================================
+# 1. COMMANDE /MARKET
+# ====================================================
+@bot.tree.command(name="market", description="Dashboard des géants de Wall Street.")
 async def market(interaction: discord.Interaction):
     await interaction.response.defer()
-    data = get_market_data()
-    image_path = generate_market_dashboard(data)
+    data = get_live_data(WATCHLIST_MARKET)
+    img_path = generate_dashboard_image(data, "US MARKET OVERVIEW", "market_dash.png")
     
-    embed = discord.Embed(title="🌐 TERMINAL WALL STREET", color=0x13141C)
-    file = discord.File(image_path, filename="dashboard.png")
-    embed.set_image(url="attachment://dashboard.png")
-    
-    await interaction.followup.send(embed=embed, file=file, view=RefreshButton())
+    file = discord.File(img_path, filename="dash.png")
+    await interaction.followup.send(file=file)
 
-@bot.tree.command(name="intel", description="Rapport complet: Fondamental, Technique, Sentiment IA et News.")
-@app_commands.describe(ticker="Symbole (ex: NVDA, AAPL)")
+# ====================================================
+# 2. COMMANDE /CRYPTO
+# ====================================================
+@bot.tree.command(name="crypto", description="Dashboard du marché Crypto.")
+async def crypto(interaction: discord.Interaction):
+    await interaction.response.defer()
+    data = get_live_data(WATCHLIST_CRYPTO)
+    img_path = generate_dashboard_image(data, "CRYPTO OVERVIEW", "crypto_dash.png")
+    
+    file = discord.File(img_path, filename="dash.png")
+    await interaction.followup.send(file=file)
+
+# ====================================================
+# 3. COMMANDE /MOVERS (Meilleurs & Pires)
+# ====================================================
+@bot.tree.command(name="movers", description="Les actions les plus volatiles aujourd'hui.")
+async def movers(interaction: discord.Interaction):
+    await interaction.response.defer()
+    # On mixe les watchlists pour trouver les extremes
+    data = get_live_data(WATCHLIST_MARKET + ["COIN", "PLTR", "INTC", "SMCI"])
+    top_4 = data[:4] # Les 4 meilleurs
+    bottom_4 = data[-4:] # Les 4 pires
+    movers_data = top_4 + bottom_4
+    
+    img_path = generate_dashboard_image(movers_data, "TOP DAILY MOVERS", "movers_dash.png")
+    file = discord.File(img_path, filename="dash.png")
+    await interaction.followup.send(file=file)
+
+# ====================================================
+# 4. COMMANDE /INTEL (Deep Dive & News fixée)
+# ====================================================
+@bot.tree.command(name="intel", description="Rapport financier 100% visuel sur un actif.")
+@app_commands.describe(ticker="Symbole (ex: NVDA, BTC-USD)")
 async def intel(interaction: discord.Interaction, ticker: str):
     ticker = ticker.upper()
     await interaction.response.defer()
@@ -104,68 +98,74 @@ async def intel(interaction: discord.Interaction, ticker: str):
     try:
         stock = yf.Ticker(ticker)
         info = stock.info
-        hist = stock.history(period="1mo")
+        hist = stock.history(period="2d")
         
-        # --- 1. Données Fondamentales ---
-        company_name = info.get('shortName', ticker)
-        current_price = info.get('currentPrice', info.get('regularMarketPrice', 'N/A'))
-        target_price = info.get('targetMeanPrice', 'N/A')
+        if len(hist) < 2:
+            await interaction.followup.send(f"❌ Données introuvables pour `{ticker}`.")
+            return
+
+        # Calcul du % journalier
+        c_prev = hist['Close'].iloc[-2]
+        c_curr = hist['Close'].iloc[-1]
+        pct_change = ((c_curr - c_prev) / c_prev) * 100
+
+        # Données Fondamentales
         mcap = info.get('marketCap', 0)
         mcap_str = f"${mcap/1e9:.1f}B" if mcap > 0 else "N/A"
-        pe_ratio = info.get('trailingPE', 'N/A')
-        fifty_two_high = info.get('fiftyTwoWeekHigh', 'N/A')
-        recommendation = str(info.get('recommendationKey', 'N/A')).replace('_', ' ').upper()
         
-        # --- 2. Données Techniques ---
-        rsi_val = calculate_rsi(hist) if len(hist) > 14 else 50
-        rsi_status = "🔴 SURACHETÉ" if rsi_val > 70 else ("🟢 SURVENDU" if rsi_val < 30 else "⚪ NEUTRE")
-        
-        # --- 3. Analyse des News (Correction du bug des sources) ---
+        intel_data = {
+            "name": info.get('shortName', ticker),
+            "price": c_curr,
+            "change": pct_change,
+            "mcap": mcap_str,
+            "pe": info.get('trailingPE', 'N/A'),
+            "high52": f"${info.get('fiftyTwoWeekHigh', 0):.2f}" if info.get('fiftyTwoWeekHigh') else "N/A",
+            "recom": str(info.get('recommendationKey', 'N/A')).replace('_', ' ').upper(),
+            "target": f"${info.get('targetMeanPrice', 0):.2f}" if info.get('targetMeanPrice') else "N/A",
+        }
+
+        # Analyse des News (CORRECTION DU BUG "0 PRESSES")
         news = stock.news
-        news_text = ""
+        news_data = []
         overall_sentiment = 0
-        
+
         if news:
-            for i, article in enumerate(news[:3]):
-                title = article.get('title', 'Titre non disponible')
-                link = article.get('link', '#')
-                # YFinance change souvent la clé du publisher. On tente plusieurs clés.
-                publisher = article.get('publisher', article.get('provider', 'Financial Press'))
+            for article in news[:3]:
+                title = article.get('title', 'Titre inconnu')
                 
-                # IA Sentiment sur le titre
+                # Extraction ultra-robuste du journal (Yahoo Finance change souvent)
+                publisher = "Financial Press"
+                if 'publisher' in article:
+                    publisher = article['publisher']
+                elif 'provider' in article:
+                    # Parfois 'provider' est un dictionnaire, parfois un string
+                    provider = article['provider']
+                    if isinstance(provider, dict):
+                        publisher = provider.get('displayName', 'News')
+                    else:
+                        publisher = str(provider)
+                
+                news_data.append({"title": title, "publisher": publisher})
+                
+                # IA Sentiment
                 score = analyzer.polarity_scores(title)['compound']
                 overall_sentiment += score
-                emoji = "🟢" if score > 0.05 else ("🔴" if score < -0.05 else "⚪")
-                
-                news_text += f"{emoji} **[{publisher}]** [{title}]({link})\n"
         else:
-            news_text = "*Aucune actualité récente (ou API YFinance bloquée).* \n"
-            
-        # Sentiment Global
-        trend_ia = "BULLISH 🚀" if overall_sentiment > 0.1 else ("BEARISH 📉" if overall_sentiment < -0.1 else "NEUTRAL ⚖️")
+            news_data.append({"title": "Aucune actualité détectée par l'algorithme aujourd'hui.", "publisher": "SYSTEM"})
 
-        # --- 4. Création de l'Embed Discord ---
-        color = 0x00E676 if "BUY" in recommendation else (0xFF3B30 if "SELL" in recommendation else 0x7A7E93)
-        embed = discord.Embed(title=f"🧠 INTELLIGENCE REPORT : {company_name} ({ticker})", color=color)
+        # Sentiment Final
+        if overall_sentiment > 0.1: intel_data['sentiment_text'] = "BULLISH 🚀"
+        elif overall_sentiment < -0.1: intel_data['sentiment_text'] = "BEARISH 📉"
+        else: intel_data['sentiment_text'] = "NEUTRAL ⚖️"
+
+        # Génération de l'image unique
+        img_path = generate_intel_image(ticker, intel_data, news_data)
         
-        # Ligne 1: Prix & Technique
-        embed.add_field(name="💵 Prix Actuel", value=f"**${current_price}**\n(52W High: ${fifty_two_high})", inline=True)
-        embed.add_field(name="📊 Indicateur RSI (14j)", value=f"**{rsi_val:.1f}**\n{rsi_status}", inline=True)
-        embed.add_field(name="🤖 Sentiment IA (News)", value=f"**{trend_ia}**", inline=True)
-        
-        # Ligne 2: Fondamental
-        embed.add_field(name="🏛️ Market Cap", value=f"**{mcap_str}**", inline=True)
-        embed.add_field(name="📈 Ratio P/E", value=f"**{pe_ratio}**", inline=True)
-        embed.add_field(name="🎯 Consensus (1 an)", value=f"Target: **${target_price}**\n({recommendation})", inline=True)
-        
-        # Ligne 3: News (Liens cliquables)
-        embed.add_field(name="📰 Dernières Annonces Institutionnelles", value=news_text, inline=False)
-        
-        embed.set_footer(text="Quant Trading Algo • Données fournies à titre indicatif")
-        await interaction.followup.send(embed=embed)
+        file = discord.File(img_path, filename="intel.png")
+        await interaction.followup.send(file=file)
         
     except Exception as e:
-        await interaction.followup.send(f"⚠️ Erreur système pour `{ticker}`. L'API financière refuse peut-être la connexion. Erreur: `{e}`")
+        await interaction.followup.send(f"⚠️ Erreur système pour `{ticker}` : {e}")
 
 if __name__ == "__main__":
     TOKEN = os.getenv('DISCORD_TOKEN')
