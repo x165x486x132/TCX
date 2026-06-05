@@ -4,3 +4,5 @@ pandas
 Pillow
 requests
 vaderSentiment
+numpy
+ta
